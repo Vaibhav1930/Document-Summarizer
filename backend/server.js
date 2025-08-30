@@ -10,8 +10,10 @@ require("dotenv").config();
 const { GoogleGenerativeAI } = require("@google/generative-ai");
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
 
-// choose model: "gemini-1.5-flash" or "gemini-1.5-pro"
-const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash" });
+// ✅ Always use the correct model
+const MODEL_NAME = "gemini-2.5-flash";
+console.log("🔎 Using Gemini model:", MODEL_NAME);
+const model = genAI.getGenerativeModel({ model: MODEL_NAME });
 
 const app = express();
 const upload = multer({ dest: "uploads/" });
@@ -23,14 +25,28 @@ app.post("/summarize", upload.single("file"), async (req, res) => {
   const filePath = req.file.path;
   let text = "";
 
+  const startTime = Date.now();
+
   try {
     if (req.file.mimetype === "application/pdf") {
       const dataBuffer = fs.readFileSync(filePath);
       const pdfData = await pdfParse(dataBuffer);
       text = pdfData.text || "";
+
+      console.log(`⏱ PDF parsing took ${(Date.now() - startTime) / 1000}s`);
+
+      // ✅ Only use OCR if no text extracted
+      if (!text.trim()) {
+        console.log("⚠️ No text found, falling back to OCR...");
+        const result = await Tesseract.recognize(filePath, "eng");
+        text = result.data.text || "";
+        console.log(`⏱ OCR took ${(Date.now() - startTime) / 1000}s`);
+      }
     } else {
+      console.log("📄 Non-PDF file, using OCR directly...");
       const result = await Tesseract.recognize(filePath, "eng");
       text = result.data.text || "";
+      console.log(`⏱ OCR took ${(Date.now() - startTime) / 1000}s`);
     }
 
     if (!text.trim()) {
@@ -45,10 +61,15 @@ app.post("/summarize", upload.single("file"), async (req, res) => {
     const summaryPrompt = `Please provide ${lengthInstruction} of the following document. Highlight key points clearly:\n\n${text}`;
     const improvementPrompt = `Here is a document:\n\n${text}\n\nPlease suggest improvements or possible actions that can be taken (e.g., add charts, expand introduction, highlight key metrics, restructure, add references).`;
 
+    console.time("⏱ Gemini summary call");
     const summaryResult = await model.generateContent(summaryPrompt);
-    const improvementsResult = await model.generateContent(improvementPrompt);
+    console.timeEnd("⏱ Gemini summary call");
 
-    // safe result extraction
+    console.time("⏱ Gemini improvement call");
+    const improvementsResult = await model.generateContent(improvementPrompt);
+    console.timeEnd("⏱ Gemini improvement call");
+
+    // Safe result extraction
     let summary = "";
     if (summaryResult.response && typeof summaryResult.response.text === "function") {
       summary = summaryResult.response.text();
@@ -63,9 +84,11 @@ app.post("/summarize", upload.single("file"), async (req, res) => {
       improvements = improvementsResult.response.candidates[0].content.parts[0].text || "";
     }
 
+    console.log(`✅ Total request handled in ${(Date.now() - startTime) / 1000}s`);
+
     res.json({ summary, improvements, summaryType });
   } catch (err) {
-    console.error("Error in summarization:", err);
+    console.error("❌ Error in summarization:", err);
     res.status(500).json({ error: "Failed to process document" });
   } finally {
     // cleanup uploaded file
