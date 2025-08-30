@@ -1,79 +1,64 @@
-// src/App.jsx
-import { useState, useCallback } from "react";
-import axios from "axios";
-import UploadBox from "./components/uploads";
-import SummaryOptions from "./components/summaryoptions";
-import Results from "./components/Result";
+import { useState } from "react";
 
 function App() {
-  const [file, setFile] = useState(null);
-  const [summaryType, setSummaryType] = useState("short");
-  const [loading, setLoading] = useState(false);
+  const [input, setInput] = useState("");
   const [summary, setSummary] = useState("");
-  const [improvements, setImprovements] = useState("");
+  const [loading, setLoading] = useState(false);
 
-  // When a new file is selected, clear previous summary/improvements automatically
-  const handleFileSelect = useCallback(
-    (f) => {
-      setFile(f);
-      setSummary("");
-      setImprovements("");
-    },
-    [setFile]
-  );
-
-  // Remove file action (from UploadBox)
-  const handleRemoveFile = useCallback(() => {
-    setFile(null);
+  async function handleSummarize() {
     setSummary("");
-    setImprovements("");
-  }, []);
-
-  const handleSummarize = async () => {
-    if (!file) return;
     setLoading(true);
-    try {
-      const formData = new FormData();
-      formData.append("file", file);
-      formData.append("summaryType", summaryType);
 
-      const res = await axios.post("https://document-summarizer-vuzs.onrender.com/summarize", formData, {
-        headers: { "Content-Type": "multipart/form-data" },
+    try {
+      const res = await fetch("https://document-summarizer-pvzn.onrender.com/summarize", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ text: input }), // ✅ Fixed
       });
 
-      setSummary(res.data.summary || "");
-      setImprovements(res.data.improvements || "");
+      if (!res.body) throw new Error("No response body");
+
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let result = "";
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        result += decoder.decode(value, { stream: true });
+        setSummary(result);
+      }
     } catch (err) {
-      console.error(err);
-      alert("Error processing file. Check backend logs.");
+      console.error("Error summarizing:", err);
+      setSummary("❌ Error: " + err.message);
     } finally {
       setLoading(false);
     }
-  };
+  }
 
   return (
-    <div className="min-h-screen bg-gray-100 flex flex-col items-center p-6">
-      <h1 className="text-3xl font-bold mb-6">📑 Document Summarizer</h1>
-
-      <div className="w-full max-w-md">
-        <UploadBox onFileSelect={handleFileSelect} onFileRemove={handleRemoveFile} />
-
-        <SummaryOptions summaryType={summaryType} setSummaryType={setSummaryType} />
-
-        <div className="space-y-3">
-          <button
-            onClick={handleSummarize}
-            disabled={loading || !file}
-            className="mt-2 w-full px-6 py-3 bg-blue-600 text-white rounded-xl shadow-lg hover:bg-blue-700 transition disabled:bg-gray-400"
-          >
-            {loading ? "Processing..." : "Summarize & Suggest"}
-          </button>
-
-          
-        </div>
+    <div className="p-6 max-w-2xl mx-auto">
+      <h1 className="text-2xl font-bold mb-4">📄 Document Summarizer</h1>
+      <textarea
+        className="w-full p-2 border rounded mb-4"
+        rows="6"
+        value={input}
+        onChange={(e) => setInput(e.target.value)}
+        placeholder="Paste text here..."
+      />
+      <button
+        onClick={handleSummarize}
+        disabled={loading}
+        className="bg-blue-500 text-white px-4 py-2 rounded"
+      >
+        {loading ? "Summarizing..." : "Summarize"}
+      </button>
+      <div className="mt-4 p-3 border rounded bg-gray-50">
+        <h2 className="font-semibold">Summary:</h2>
+        <p>{summary}</p>
       </div>
-
-      <Results summary={summary} improvements={improvements} />
     </div>
   );
 }
