@@ -37,7 +37,7 @@ function App() {
       formData.append("file", file);
       formData.append("summaryType", summaryType);
 
-      const res = await axios.post("http://localhost:5000/summarize", formData, {
+      const res = await axios.post("https://document-summarizer-vuzs.onrender.com/summarize", formData, {
         headers: { "Content-Type": "multipart/form-data" },
       });
 
