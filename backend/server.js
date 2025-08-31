@@ -104,9 +104,9 @@ Rules:
       summaryType: summaryType || "short",
     });
 
-    console.log(`✅ /summarize done in ${((Date.now() - start) / 1000).toFixed(2)}s`);
+    console.log(`/summarize done in ${((Date.now() - start) / 1000).toFixed(2)}s`);
   } catch (err) {
-    console.error("❌ Error in /summarize:", err?.message || err);
+    console.error("Error in /summarize:", err?.message || err);
     res.status(500).json({ error: "Failed to process document" });
   } finally {
     try { fs.unlinkSync(filePath); } catch {}
@@ -115,5 +115,5 @@ Rules:
 
 const PORT = process.env.PORT || 5000;
 app.listen(PORT, () => {
-  console.log(`✅ Backend running on port ${PORT} (model: ${MODEL_NAME})`);
+  console.log(`Backend running on port ${PORT} (model: ${MODEL_NAME})`);
 });
