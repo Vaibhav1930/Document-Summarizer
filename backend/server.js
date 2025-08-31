@@ -1,4 +1,4 @@
-// server.js
+// server.js (fixed schema)
 const express = require("express");
 const multer = require("multer");
 const cors = require("cors");
@@ -12,8 +12,6 @@ if (!process.env.GEMINI_API_KEY) {
 }
 
 const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
-
-// Fast multimodal model. You can switch to "gemini-1.5-flash" if you prefer.
 const MODEL_NAME = "gemini-2.5-flash";
 const model = genAI.getGenerativeModel({ model: MODEL_NAME });
 
@@ -21,56 +19,41 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
-// Multer for file uploads
-const upload = multer({
-  dest: "uploads/",
-  limits: { fileSize: 25 * 1024 * 1024 }, // 25MB
-});
+const upload = multer({ dest: "uploads/", limits: { fileSize: 25 * 1024 * 1024 } });
 
-// Health check
 app.get("/health", (_, res) => res.json({ ok: true, model: MODEL_NAME }));
 
-// Summarize endpoint
 app.post("/summarize", upload.single("file"), async (req, res) => {
   const start = Date.now();
-
-  if (!req.file) {
-    return res.status(400).json({ error: "No file received" });
-  }
+  if (!req.file) return res.status(400).json({ error: "No file received" });
 
   const filePath = req.file.path;
   const mime = req.file.mimetype || "application/octet-stream";
 
   try {
-    // Read file and convert to base64 for multimodal input
     const fileData = fs.readFileSync(filePath);
     const base64 = fileData.toString("base64");
 
-    // Summary length instruction
     const { summaryType } = req.body || {};
     let lengthInstruction = "a short summary";
     if (summaryType === "medium") lengthInstruction = "a medium summary";
     if (summaryType === "long") lengthInstruction = "a detailed long summary";
 
-    // Single prompt; ask for strict JSON (no backticks)
     const systemPrompt = `
 You are a precise Document Summarizer.
-Analyze the provided document (PDF or image) and respond STRICTLY as valid JSON with no markdown, no backticks, and no extra keys.
+Analyze the document (PDF or image) and respond STRICTLY as valid JSON.
 
 JSON schema:
 {
-  "summary": string,        // ${lengthInstruction}; clear bullets allowed
+  "summary": string,        // ${lengthInstruction}; bullets allowed
   "improvements": string    // practical, actionable suggestions
 }
 
 Rules:
-- Do NOT include code fences or the word "json".
-- If the document is an image/screenshot, infer context but stay concise.
-- Use bullet points where useful.
-- Keep the language neutral and professional.
+- No backticks, no markdown.
+- Only return pure JSON.
 `;
 
-    // Ask Gemini for structured output and enforce JSON mime type
     const result = await model.generateContent({
       contents: [
         {
@@ -83,7 +66,6 @@ Rules:
       ],
       generationConfig: {
         responseMimeType: "application/json",
-        // Optional: add a response schema to further enforce structure
         responseSchema: {
           type: "object",
           properties: {
@@ -91,12 +73,10 @@ Rules:
             improvements: { type: "string" },
           },
           required: ["summary", "improvements"],
-          additionalProperties: false,
         },
       },
     });
 
-    // Primary path: strictly JSON from the model
     let payloadText = "";
     if (typeof result.response?.text === "function") {
       payloadText = result.response.text();
@@ -110,7 +90,6 @@ Rules:
     try {
       payload = JSON.parse(payloadText);
     } catch {
-      // Fallback: extract the first {...} block if model ever wraps it
       const match = payloadText.match(/\{[\s\S]*\}/);
       if (match) {
         payload = JSON.parse(match[0]);
@@ -119,22 +98,18 @@ Rules:
       }
     }
 
-    const summary = String(payload.summary || "").trim();
-    const improvements = String(payload.improvements || "").trim();
+    res.json({
+      summary: String(payload.summary || "").trim(),
+      improvements: String(payload.improvements || "").trim(),
+      summaryType: summaryType || "short",
+    });
 
-    res.json({ summary, improvements, summaryType: summaryType || "short" });
-
-    console.log(
-      `✅ /summarize done in ${((Date.now() - start) / 1000).toFixed(2)}s`
-    );
+    console.log(`✅ /summarize done in ${((Date.now() - start) / 1000).toFixed(2)}s`);
   } catch (err) {
     console.error("❌ Error in /summarize:", err?.message || err);
     res.status(500).json({ error: "Failed to process document" });
   } finally {
-    // cleanup uploaded file
-    try {
-      fs.unlinkSync(filePath);
-    } catch {}
+    try { fs.unlinkSync(filePath); } catch {}
   }
 });
 
