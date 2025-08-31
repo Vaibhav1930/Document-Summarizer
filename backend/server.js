@@ -2,7 +2,7 @@
 const express = require("express");
 const multer = require("multer");
 const pdfParse = require("pdf-parse");
-const tesseract = require("node-tesseract-ocr");
+const Tesseract = require("tesseract.js");
 const cors = require("cors");
 const fs = require("fs");
 require("dotenv").config();
@@ -23,13 +23,10 @@ app.use(express.json());
 
 const upload = multer({ dest: "uploads/", limits: { fileSize: 25 * 1024 * 1024 } });
 
-// OCR config
-const ocrConfig = {
-  lang: "eng",
-  oem: 1,
-  psm: 3,
-};
+// Health check
+app.get("/health", (_, res) => res.json({ ok: true, model: MODEL_NAME }));
 
+// Summarize route
 app.post("/summarize", upload.single("file"), async (req, res) => {
   const start = Date.now();
   if (!req.file) return res.status(400).json({ error: "No file uploaded" });
@@ -39,20 +36,23 @@ app.post("/summarize", upload.single("file"), async (req, res) => {
   let extractedText = "";
 
   try {
-    // PDF handling
+    // Case 1: PDF parsing
     if (mimeType === "application/pdf") {
       const dataBuffer = fs.readFileSync(filePath);
       const pdfData = await pdfParse(dataBuffer);
       extractedText = pdfData.text || "";
 
+      // Fallback to OCR if no text
       if (!extractedText.trim()) {
         console.log("No text in PDF, running OCR...");
-        extractedText = await tesseract.recognize(filePath, ocrConfig);
+        const ocrResult = await Tesseract.recognize(filePath, "eng");
+        extractedText = ocrResult.data.text || "";
       }
     } else {
-      // Image → OCR
+      // Case 2: Image file → OCR
       console.log("Image detected, running OCR...");
-      extractedText = await tesseract.recognize(filePath, ocrConfig);
+      const ocrResult = await Tesseract.recognize(filePath, "eng");
+      extractedText = ocrResult.data.text || "";
     }
 
     if (!extractedText.trim()) {
@@ -65,24 +65,42 @@ app.post("/summarize", upload.single("file"), async (req, res) => {
     if (summaryType === "medium") lengthInstruction = "a medium summary";
     if (summaryType === "long") lengthInstruction = "a detailed long summary";
 
-    // Streaming Gemini response
-    res.setHeader("Content-Type", "application/json; charset=utf-8");
+    // Prompt (single call for both summary + improvements)
+    const prompt = `
+      You are a document summarizer assistant.
+      Analyze the following text and return output strictly in JSON.
 
-    const stream = await model.generateContentStream({
-      contents: [{ role: "user", parts: [{ text: `Summarize this document:\n${extractedText}\n\nProvide ${lengthInstruction} and suggest improvements.` }] }]
-    });
+      Text:
+      ${extractedText}
 
-    let fullResponse = "";
-    for await (const chunk of stream.stream) {
-      const chunkText = chunk.text();
-      if (chunkText) {
-        fullResponse += chunkText;
-        // Send partial results to frontend
-        res.write(JSON.stringify({ partial: chunkText }) + "\n");
+      JSON schema:
+      {
+        "summary": "<${lengthInstruction} of the document, highlight key points>",
+        "improvements": "<practical improvements or actions>"
       }
+
+      Rules:
+      - Do not include markdown or code fences
+      - Only output pure JSON
+    `;
+
+    const result = await model.generateContent(prompt);
+    let outputText = result.response?.text() || "";
+
+    // Try to parse JSON safely
+    let parsed;
+    try {
+      parsed = JSON.parse(outputText);
+    } catch {
+      const match = outputText.match(/\{[\s\S]*\}/);
+      parsed = match ? JSON.parse(match[0]) : { summary: outputText, improvements: "" };
     }
 
-    res.end(JSON.stringify({ final: fullResponse, summaryType: summaryType || "short" }));
+    res.json({
+      summary: parsed.summary || "",
+      improvements: parsed.improvements || "",
+      summaryType: summaryType || "short",
+    });
 
     console.log(`Request completed in ${(Date.now() - start) / 1000}s`);
   } catch (err) {
